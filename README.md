@@ -123,11 +123,9 @@ from `decompress` changes nothing, because `poll` has already drained everything
 **AddressSanitizer**: `SYSL_EXTRA_CFLAGS="-fsanitize=address -g" sysl test .` passes 18/18, with 10
 `__asan_report` references linked into the test binary.
 
-## Findings against sysl 0.1.0-alpha.12
+## Findings
 
-1. A package's C cannot be compiled against `cstd`'s headers: see Bare metal. Accepted for alpha.14.
-2. `sysl test` has no per-test timeout: a mutated binding that looped for ever held the run until the
-   test binary was killed by hand. Wanted: `--timeout`, or an attribute on `@test`.
+What this package found in sysl is in `FINDINGS.md`.
 
 ## Vendored
 
