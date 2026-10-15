@@ -24,3 +24,7 @@ inside a test. The run held until the test binary was killed by hand, and the ru
 exit 143. `sysl test --help` lists no timeout. A mutation pass, or any test of code that can loop,
 needs one. Wanted: a `--timeout` for the run, or a per-test limit on `@test`, that fails the test
 naming it rather than hanging the suite.
+
+**Status: accepted for alpha.14** (sysl branch `test-timeout`): `--timeout <s>` per test,
+`@test(timeout: <s>)`, a default of 300 s (`--timeout 0` turns it off). A test that runs out fails by
+name and the run continues, and the runner kills its test binaries when it exits or is killed.
