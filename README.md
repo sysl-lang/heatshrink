@@ -3,6 +3,8 @@
 LZSS compression for small machines, bound to
 [heatshrink](https://github.com/atomicobject/heatshrink) 0.4.1, vendored unchanged.
 
+*An independent sysl package for heatshrink. It is not affiliated with or endorsed by heatshrink's authors or trademark holders.*
+
 - **It is small.** The encoder takes about 1.6 KiB and the decoder about 300 bytes, whatever they are
   given: a 256-byte window, matches of up to 16 bytes.
 - **It needs no heap.** The encoder's window and search index and the decoder's input buffer and window
