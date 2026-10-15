@@ -1,0 +1,36 @@
+// heatshrink for sysl: LZSS compression for small machines, bound to the heatshrink C library
+// (atomicobject/heatshrink), vendored unchanged.
+//
+// This is the block a consumer writes to reach it:
+//
+//     dependencies {
+//       heatshrink { git = "github.com/sysl-lang/heatshrink", version = "<the first tag>" }
+//     }
+//
+// The module is `sh.sysl.heatshrink`.
+
+package {
+  name    = "heatshrink"
+  version = "0.0.1"
+}
+
+// **What heatshrink is compiled with is this package's decision, not a consumer's.**
+//
+// - `HEATSHRINK_DYNAMIC_ALLOC = 0`: static allocation. heatshrink never calls `malloc`; the encoder
+//   and decoder are plain structs whose buffers are arrays inside them, so the binding holds them
+//   inline and the package runs where there is no heap. This is the only option upstream's
+//   `heatshrink_config.h` leaves to the compiler's command line (it is wrapped in `#ifndef`).
+//
+// - The sizes are not ours to choose. With static allocation upstream fixes them in
+//   `heatshrink_config.h` itself, **unguarded**: `HEATSHRINK_STATIC_WINDOW_BITS` 8,
+//   `HEATSHRINK_STATIC_LOOKAHEAD_BITS` 4 and `HEATSHRINK_STATIC_INPUT_BUFFER_SIZE` 32. A `-D` for
+//   any of them is a macro redefinition and the header's value wins, and the header is vendored
+//   unchanged, so these are the values the package has. They are the sensible small-machine
+//   defaults anyway: a 256-byte window and matches up to 16 bytes, which together keep an encoder
+//   near 1.6 KiB and a decoder near 300 bytes. Data compressed with other parameters (the `heatshrink`
+//   command line tool's `-w 11 -l 4`, for one) cannot be decoded here.
+defines {
+  "sh/sysl/heatshrink/c/{heatshrink_encoder,heatshrink_decoder}.c" {
+    HEATSHRINK_DYNAMIC_ALLOC = 0
+  }
+}

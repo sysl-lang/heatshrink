@@ -1,0 +1,86 @@
+// heatshrink as C declares it.
+//
+// **Everything that is C lives in this directory**: the six files as they come from upstream, and this
+// file of declarations over them. Nothing here is meant to be called by a program: the module above
+// turns these into methods over slices and `Result`s, and is what an application imports.
+//
+// The encoder and decoder are structs whose size depends on how heatshrink was compiled (see
+// `package.hocon`), so sysl never spells their fields. It holds each as words of the size the header
+// says.
+
+module sh.sysl.heatshrink.c
+
+@include("heatshrink_encoder.h")
+@include("heatshrink_decoder.h")
+@include("stddef.h")
+
+// What `heatshrink_encoder_sink`, `_poll` and `_finish` answer.
+c const
+    ENC_SINK_OK:       int = "HSER_SINK_OK"
+    ENC_SINK_NULL:     int = "HSER_SINK_ERROR_NULL"
+    ENC_SINK_MISUSE:   int = "HSER_SINK_ERROR_MISUSE"
+    ENC_POLL_EMPTY:    int = "HSER_POLL_EMPTY"
+    ENC_POLL_MORE:     int = "HSER_POLL_MORE"
+    ENC_POLL_NULL:     int = "HSER_POLL_ERROR_NULL"
+    ENC_POLL_MISUSE:   int = "HSER_POLL_ERROR_MISUSE"
+    ENC_FINISH_DONE:   int = "HSER_FINISH_DONE"
+    ENC_FINISH_MORE:   int = "HSER_FINISH_MORE"
+    ENC_FINISH_NULL:   int = "HSER_FINISH_ERROR_NULL"
+
+// ... and the decoder's.
+c const
+    DEC_SINK_OK:       int = "HSDR_SINK_OK"
+    DEC_SINK_FULL:     int = "HSDR_SINK_FULL"
+    DEC_SINK_NULL:     int = "HSDR_SINK_ERROR_NULL"
+    DEC_POLL_EMPTY:    int = "HSDR_POLL_EMPTY"
+    DEC_POLL_MORE:     int = "HSDR_POLL_MORE"
+    DEC_POLL_NULL:     int = "HSDR_POLL_ERROR_NULL"
+    DEC_POLL_UNKNOWN:  int = "HSDR_POLL_ERROR_UNKNOWN"
+    DEC_FINISH_DONE:   int = "HSDR_FINISH_DONE"
+    DEC_FINISH_MORE:   int = "HSDR_FINISH_MORE"
+    DEC_FINISH_NULL:   int = "HSDR_FINISH_ERROR_NULL"
+
+// The parameters heatshrink was compiled with. With static allocation they are macros in
+// `heatshrink_config.h`, and the data it compresses can only be decoded by the same values.
+c const
+    WINDOW_BITS:       int   = "HEATSHRINK_STATIC_WINDOW_BITS"
+    LOOKAHEAD_BITS:    int   = "HEATSHRINK_STATIC_LOOKAHEAD_BITS"
+    INPUT_BUFFER_SIZE: usize = "HEATSHRINK_STATIC_INPUT_BUFFER_SIZE"
+    DYNAMIC_ALLOC:     int   = "HEATSHRINK_DYNAMIC_ALLOC"
+    VERSION_MAJOR:     int   = "HEATSHRINK_VERSION_MAJOR"
+    VERSION_MINOR:     int   = "HEATSHRINK_VERSION_MINOR"
+    VERSION_PATCH:     int   = "HEATSHRINK_VERSION_PATCH"
+
+// The two handles, as the header measures them.
+c const
+    ENCODER_SIZE:  usize = "sizeof(heatshrink_encoder)"
+    ENCODER_ALIGN: usize = "_Alignof(heatshrink_encoder)"
+    DECODER_SIZE:  usize = "sizeof(heatshrink_decoder)"
+    DECODER_ALIGN: usize = "_Alignof(heatshrink_decoder)"
+
+// Opaque stand-ins, so a pointer to one says which it is.
+struct Encoder
+    private word: u64
+
+struct Decoder
+    private word: u64
+
+// **A package that is not compiled statically would have a different `Encoder` altogether**, with a
+// pointer and a flexible array in it; the binding is written for the static layout only.
+@assert(DYNAMIC_ALLOC == 0, "the binding needs heatshrink compiled with HEATSHRINK_DYNAMIC_ALLOC 0")
+
+// The handles are held as arrays of `u64`, which are 8-aligned. One that wants more is refused.
+@assert(ENCODER_ALIGN <= 8, "'heatshrink_encoder' wants a stronger alignment than an array of u64 gives")
+@assert(DECODER_ALIGN <= 8, "'heatshrink_decoder' wants a stronger alignment than an array of u64 gives")
+
+// The encoder.
+extern "heatshrink_encoder_reset" encoder_reset(hse: *Encoder)
+extern "heatshrink_encoder_sink" encoder_sink(hse: *Encoder, in_buf: *u8, size: usize, input_size: *usize) -> int
+extern "heatshrink_encoder_poll" encoder_poll(hse: *Encoder, out_buf: *u8, out_buf_size: usize, output_size: *usize) -> int
+extern "heatshrink_encoder_finish" encoder_finish(hse: *Encoder) -> int
+
+// The decoder.
+extern "heatshrink_decoder_reset" decoder_reset(hsd: *Decoder)
+extern "heatshrink_decoder_sink" decoder_sink(hsd: *Decoder, in_buf: *u8, size: usize, input_size: *usize) -> int
+extern "heatshrink_decoder_poll" decoder_poll(hsd: *Decoder, out_buf: *u8, out_buf_size: usize, output_size: *usize) -> int
+extern "heatshrink_decoder_finish" decoder_finish(hsd: *Decoder) -> int

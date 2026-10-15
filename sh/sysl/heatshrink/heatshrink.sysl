@@ -1,0 +1,183 @@
+module sh.sysl.heatshrink
+
+import sh.sysl.heatshrink.c
+import sysl.slices.{as_mut_ptr, as_ptr}
+
+// LZSS compression for small machines, bound to heatshrink: an encoder that needs about 1.6 KiB and a
+// decoder that needs about 300 bytes, whatever they are given.
+//
+// Nothing here allocates. The encoder's window and search index and the decoder's input buffer and
+// window are arrays inside the sysl values that own them, so a board with no heap declares them as
+// module storage, or on the stack, and is done.
+//
+// **The window is 256 bytes and a match is at most 16 bytes** (window bits 8, lookahead bits 4):
+// heatshrink fixes both in its configuration header when it is built without an allocator, and the
+// header is vendored unchanged. Data compressed with other parameters cannot be decoded by this
+// package, nor this package's by a decoder with other parameters.
+//
+// **The format carries no length and no checksum.** A decoder given damaged or truncated input does
+// not fail: it answers whatever those bits decode to. Frame the data (a length, a CRC) if that matters.
+
+// The window and lookahead sizes the package was built with, as base-2 logarithms, and the size of the
+// decoder's input buffer in bytes.
+const WINDOW_BITS: int = c.WINDOW_BITS
+const LOOKAHEAD_BITS: int = c.LOOKAHEAD_BITS
+const INPUT_BUFFER_SIZE: usize = c.INPUT_BUFFER_SIZE
+
+// Why an operation failed.
+enum Error derives Eq, Display
+    // The output buffer given to `compress` or `decompress` is too small for the result.
+    OutputFull
+
+    // The call was out of order or had nothing to work on: an encoder sunk into after `finish`, or a
+    // `poll` into an empty slice.
+    Misuse
+
+    // A code this binding does not know, from a heatshrink newer than the one it was written against.
+    Unknown(code: int)
+
+// What one `poll` produced.
+struct Polled
+    // How many bytes were written to the front of the output slice.
+    written: usize
+
+    // The output slice filled up, so there may be more: poll again into fresh room.
+    more: bool
+
+private[heatshrink] const ENCODER_WORDS: usize = (c.ENCODER_SIZE + 7) / 8
+private[heatshrink] const DECODER_WORDS: usize = (c.DECODER_SIZE + 7) / 8
+
+// The compressor. Feed it with `sink`, take the compressed bytes with `poll`, and call `finish` when
+// the input is over. `sink` takes only what its buffer has room for, so the two alternate: sink,
+// poll until `more` is false, sink again.
+struct Encoder
+    private state: [ENCODER_WORDS]u64
+
+    // Start over, as if just made.
+    reset(*self)
+        c.encoder_reset(ptr_cast(&self.state[0]))
+
+    // Offer `data`; answers how many bytes of it were taken, which is the front of `data`, and which
+    // is fewer than `data.len` when the input buffer filled. Poll, then offer the rest.
+    sink(*self, data: []const u8) -> Result[usize, Error]
+        if data.len == 0 then return Ok(0)
+        var taken = 0usize
+        val code = c.encoder_sink(ptr_cast(&self.state[0]), as_ptr(data), data.len, &taken)
+        if code < 0 then Err(encoder_error(code)) else Ok(taken)
+
+    // Copy compressed bytes into `out`, which must not be empty.
+    poll(*self, out: []u8) -> Result[Polled, Error]
+        var written = 0usize
+        val code = c.encoder_poll(ptr_cast(&self.state[0]), as_mut_ptr(out), out.len, &written)
+        if code < 0 then Err(encoder_error(code)) else Ok(Polled(written, code == c.ENC_POLL_MORE))
+
+    // Say that the input is over. Answers true while output remains: poll, then call `finish` again,
+    // until it answers false.
+    finish(*self) -> Result[bool, Error]
+        val code = c.encoder_finish(ptr_cast(&self.state[0]))
+        if code < 0 then Err(encoder_error(code)) else Ok(code == c.ENC_FINISH_MORE)
+
+// A compressor ready for input.
+encoder() -> Encoder
+    var e = Encoder([0; ENCODER_WORDS])
+    e.reset()
+    e
+
+// The decompressor. Feed it compressed bytes with `sink`, take the original with `poll`, and call
+// `finish` when the input is over. Its input buffer is `INPUT_BUFFER_SIZE` bytes: `sink` takes what
+// fits, and answers 0 when it is full until a `poll` has made room.
+struct Decoder
+    private state: [DECODER_WORDS]u64
+
+    // Start over, as if just made.
+    reset(*self)
+        c.decoder_reset(ptr_cast(&self.state[0]))
+
+    // Offer `data`; answers how many bytes of it were taken.
+    sink(*self, data: []const u8) -> Result[usize, Error]
+        if data.len == 0 then return Ok(0)
+        var taken = 0usize
+        val code = c.decoder_sink(ptr_cast(&self.state[0]), as_ptr(data), data.len, &taken)
+        if code < 0 then Err(decoder_error(code)) else Ok(taken)
+
+    // Copy decompressed bytes into `out`.
+    poll(*self, out: []u8) -> Result[Polled, Error]
+        var written = 0usize
+        val code = c.decoder_poll(ptr_cast(&self.state[0]), as_mut_ptr(out), out.len, &written)
+        if code < 0 then Err(decoder_error(code)) else Ok(Polled(written, code == c.DEC_POLL_MORE))
+
+    // Say that the input is over. Answers true while output remains: poll, then call `finish` again,
+    // until it answers false.
+    finish(*self) -> Result[bool, Error]
+        val code = c.decoder_finish(ptr_cast(&self.state[0]))
+        if code < 0 then Err(decoder_error(code)) else Ok(code == c.DEC_FINISH_MORE)
+
+// A decompressor ready for input.
+decoder() -> Decoder
+    var d = Decoder([0; DECODER_WORDS])
+    d.reset()
+    d
+
+// Compress `input` into `out`; answers how many bytes of `out` it wrote, or `Error.OutputFull` if the
+// result does not fit. Incompressible input grows by up to one bit in eight, so an `out` of
+// `input.len + input.len / 8 + 2` bytes always fits.
+compress(input: []const u8, out: []u8) -> Result[usize, Error]
+    var enc = encoder()
+    var sunk = 0usize
+    var written = 0usize
+    while sunk < input.len
+        sunk += enc.sink(input[sunk..<input.len])?
+        written += drain_encoder(&enc, out, written)?
+    loop
+        val more = enc.finish()?
+        written += drain_encoder(&enc, out, written)?
+        if !more then break
+    Ok(written)
+
+// Decompress `input` into `out`; answers how many bytes of `out` it wrote, or `Error.OutputFull` if the
+// result does not fit.
+decompress(input: []const u8, out: []u8) -> Result[usize, Error]
+    var dec = decoder()
+    var sunk = 0usize
+    var written = 0usize
+    while sunk < input.len
+        val taken = dec.sink(input[sunk..<input.len])?
+        sunk += taken
+        val got = drain_decoder(&dec, out, written)?
+        written += got
+        if taken == 0 && got == 0 then return Err(Error.Unknown(c.DEC_SINK_FULL))
+    loop
+        if !dec.finish()? then break
+        val got = drain_decoder(&dec, out, written)?
+        written += got
+        if got == 0 then break
+    Ok(written)
+
+// Poll the encoder dry into `out` from `at` on. Output with nowhere to go is `OutputFull`.
+private drain_encoder(enc: *Encoder, out: []u8, at: usize) -> Result[usize, Error]
+    var n = 0usize
+    loop
+        if at + n == out.len then
+            var probe: [1]u8 = [0]
+            val p = enc.poll(probe[0..<1])?
+            return if p.written > 0 then Err(Error.OutputFull) else Ok(n)
+        val p = enc.poll(out[at + n ..< out.len])?
+        n += p.written
+        if !p.more then return Ok(n)
+
+private drain_decoder(dec: *Decoder, out: []u8, at: usize) -> Result[usize, Error]
+    var n = 0usize
+    loop
+        if at + n == out.len then
+            var probe: [1]u8 = [0]
+            val p = dec.poll(probe[0..<1])?
+            return if p.written > 0 then Err(Error.OutputFull) else Ok(n)
+        val p = dec.poll(out[at + n ..< out.len])?
+        n += p.written
+        if !p.more then return Ok(n)
+
+private encoder_error(code: int) -> Error
+    if code == c.ENC_SINK_NULL || code == c.ENC_SINK_MISUSE then Error.Misuse else Error.Unknown(code)
+
+private decoder_error(code: int) -> Error
+    if code == c.DEC_SINK_NULL then Error.Misuse else Error.Unknown(code)

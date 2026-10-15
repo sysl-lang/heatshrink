@@ -1,0 +1,143 @@
+module sh.sysl.heatshrink
+@tests
+@requires(heap, os)
+
+import sh.sysl.heatshrink.c
+import sysl.fs.{make_temp_dir, read_bytes, remove_dir_all, write_bytes, write_text}
+import sysl.process.capture
+
+// The binding against heatshrink driven from C. A program written straight against the heatshrink
+// headers, compiled from the same vendored source with the same options, compresses and decompresses
+// files; the binding does the same to the same bytes. heatshrink is deterministic, so the compressed
+// bytes must be identical, and each side must decompress what the other wrote. The C driver feeds the
+// encoder 7 bytes at a time and polls 5, so the comparison also shows that the compressed bytes do
+// not depend on how the input is chunked.
+
+private val DRIVER: string = raw"""
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include "heatshrink_encoder.h"
+    #include "heatshrink_decoder.h"
+
+    static unsigned char in[1 << 16], out[1 << 18];
+
+    int main(int argc, char **argv) {
+        char mode = argv[1][0];
+        if (mode == 's') {
+            printf("%zu %zu %d %d %d", sizeof(heatshrink_encoder), sizeof(heatshrink_decoder),
+                   HEATSHRINK_STATIC_WINDOW_BITS, HEATSHRINK_STATIC_LOOKAHEAD_BITS,
+                   HEATSHRINK_STATIC_INPUT_BUFFER_SIZE);
+            return 0;
+        }
+        FILE *f = fopen(argv[2], "rb");
+        if (!f) return 2;
+        size_t n = fread(in, 1, sizeof in, f);
+        fclose(f);
+        size_t sunk = 0, total = 0, took, got;
+        if (mode == 'c') {
+            heatshrink_encoder enc;
+            heatshrink_encoder_reset(&enc);
+            while (sunk < n) {
+                size_t want = n - sunk < 7 ? n - sunk : 7;
+                if (heatshrink_encoder_sink(&enc, in + sunk, want, &took) < 0) return 3;
+                sunk += took;
+                HSE_poll_res r;
+                do {
+                    r = heatshrink_encoder_poll(&enc, out + total, 5, &got);
+                    if (r < 0) return 4;
+                    total += got;
+                } while (r == HSER_POLL_MORE);
+            }
+            while (heatshrink_encoder_finish(&enc) == HSER_FINISH_MORE) {
+                HSE_poll_res r;
+                do {
+                    r = heatshrink_encoder_poll(&enc, out + total, 5, &got);
+                    if (r < 0) return 5;
+                    total += got;
+                } while (r == HSER_POLL_MORE);
+            }
+        } else {
+            heatshrink_decoder dec;
+            heatshrink_decoder_reset(&dec);
+            while (sunk < n) {
+                size_t want = n - sunk < 7 ? n - sunk : 7;
+                if (heatshrink_decoder_sink(&dec, in + sunk, want, &took) < 0) return 6;
+                sunk += took;
+                HSD_poll_res r;
+                do {
+                    r = heatshrink_decoder_poll(&dec, out + total, 5, &got);
+                    if (r < 0) return 7;
+                    total += got;
+                } while (r == HSDR_POLL_MORE);
+            }
+            while (heatshrink_decoder_finish(&dec) == HSDR_FINISH_MORE) {
+                HSD_poll_res r;
+                do {
+                    r = heatshrink_decoder_poll(&dec, out + total, 5, &got);
+                    if (r < 0) return 8;
+                    total += got;
+                } while (r == HSDR_POLL_MORE);
+            }
+        }
+        f = fopen(argv[3], "wb");
+        if (!f || fwrite(out, 1, total, f) != total || fclose(f)) return 9;
+        return 0;
+    }
+    """
+
+private val C_DIR: string = "sh/sysl/heatshrink/c"
+
+// Build the C driver in a fresh directory; answers the directory.
+private build_driver() -> string
+    val dir = make_temp_dir("heatshrink-oracle-").unwrap()
+    write_text(s"${dir}/driver.c", DRIVER).unwrap()
+    val built = capture("clang", ["-O1", "-I", C_DIR, "-DHEATSHRINK_DYNAMIC_ALLOC=0", "-o", s"${dir}/driver",
+                                  s"${dir}/driver.c", s"${C_DIR}/heatshrink_encoder.c",
+                                  s"${C_DIR}/heatshrink_decoder.c"], stderr = true).unwrap()
+    assert(built.status.ok(), s"the C driver did not build: ${built.text}")
+    dir
+
+// Run the driver in `mode` ('c' or 'd') over `input`; answers what it wrote.
+private run_driver(dir: string, mode: string, input: []const u8) -> []u8
+    write_bytes(s"${dir}/in", input).unwrap()
+    val ran = capture(s"${dir}/driver", [mode, s"${dir}/in", s"${dir}/out"], stderr = true).unwrap()
+    assert(ran.status.ok(), s"the C driver failed in mode ${mode}")
+    read_bytes(s"${dir}/out").unwrap()
+
+private same_bytes(ours: []const u8, theirs: []const u8)
+    assert_eq(ours.len, theirs.len)
+    var first_difference = -1
+    for i in 0..<ours.len
+        if ours[i] != theirs[i] then
+            first_difference = int(i)
+            break
+    assert_eq(first_difference, -1)
+
+@test("the binding was compiled with the sizes and parameters the C driver sees")
+same_layout_as_c()
+    val dir = build_driver()
+    val ran = capture(s"${dir}/driver", ["s"], stderr = true).unwrap()
+    assert_eq(ran.text, s"${c.ENCODER_SIZE} ${c.DECODER_SIZE} ${WINDOW_BITS} ${LOOKAHEAD_BITS} ${INPUT_BUFFER_SIZE}")
+    remove_dir_all(dir).unwrap()
+
+@test("the binding compresses to the same bytes as heatshrink driven from C, and each decompresses the other's")
+same_bytes_as_c()
+    val dir = build_driver()
+    var data: [8192]u8 = [0; 8192]
+    var comp: [8192]u8 = [0; 8192]
+    var back: [8192]u8 = [0; 8192]
+    for kind in 0..<SAMPLES
+        val n = sample(kind, data[0..<8192])
+        val input = data[0..<n]
+        val size = compress(input, comp[0..<8192]).unwrap()
+        val theirs = run_driver(dir, "c", input)
+        same_bytes(comp[0..<size], theirs)
+
+        // the C decoder reads what the binding wrote
+        same_bytes(input, run_driver(dir, "d", comp[0..<size]))
+
+        // the binding reads what the C encoder wrote
+        val m = decompress(theirs, back[0..<8192]).unwrap()
+        same_bytes(back[0..<m], input)
+    remove_dir_all(dir).unwrap()
