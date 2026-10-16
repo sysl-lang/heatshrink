@@ -4,14 +4,14 @@
 // This is the block a consumer writes to reach it:
 //
 //     dependencies {
-//       heatshrink { git = "github.com/sysl-lang/heatshrink", version = "<the first tag>" }
+//       heatshrink { git = "github.com/sysl-lang/heatshrink", version = "0.1.0" }
 //     }
 //
 // The module is `sh.sysl.heatshrink`.
 
 package {
   name    = "heatshrink"
-  version = "0.0.1"
+  version = "0.1.0"
 }
 
 // **What heatshrink is compiled with is this package's decision, not a consumer's.**
