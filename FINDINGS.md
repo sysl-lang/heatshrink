@@ -15,7 +15,8 @@ sh/sysl/heatshrink/c/heatshrink_decoder.c:1:10: fatal error: 'stdlib.h' file not
 
 The same gap littlefs found (its FINDINGS 1).
 
-**Status: accepted for alpha.14** (sysl branch `vendored-c`).
+**Status: fixed in sysl 0.1.2** (`if = "!libc"` dependencies): the package takes `sysl-lang/cstd` as its
+libc on a board, and the suite builds it for three bare-metal targets.
 
 ## 2. `sysl test` has no per-test timeout (gap)
 

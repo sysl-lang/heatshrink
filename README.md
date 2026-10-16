@@ -83,21 +83,19 @@ debugging logs, which need `<stdio.h>`. Both are off.
 
 ## Bare metal
 
-The package needs no operating system and no allocator, but its C includes `<stdlib.h>` and `<string.h>`,
-and a sysl package has no way yet to hand it `sysl-lang/cstd`'s headers (the gap littlefs hit; accepted for
-alpha.14). Until then:
+The package needs no operating system and no allocator. Its C includes `<stdlib.h>` and `<string.h>`
+and calls `memcpy`, `memmove` and `memset`, so on a board it builds with `sysl-lang/cstd` as its libc
+(`cstd { ..., if = "!libc" }` in `package.hocon`); on a hosted target the dependency is dropped and the
+system libc answers. The suite builds it with `build-c` for `thumbv7em-freestanding`,
+`thumbv6m-freestanding` and `riscv32-freestanding` and checks with `nm` that the archive defines the
+encoder and decoder entry points and cstd's `memcpy`, `memmove` and `memset`. This needs sysl 0.1.2 or
+later.
 
-```
-sysl build-lib . --target thumb-freestanding
-sysl: error: sh/sysl/heatshrink/c/heatshrink_decoder.c did not compile (clang, exit 1):
-sh/sysl/heatshrink/c/heatshrink_decoder.c:1:10: fatal error: 'stdlib.h' file not found
-```
-
-A target with a C library (the Pico SDK's newlib, Zephyr, FreeRTOS) has the headers already.
+A target with a C library of its own (the Pico SDK's newlib, Zephyr, FreeRTOS) has the headers already.
 
 ## Tests
 
-`sysl test .` runs 18 tests:
+`sysl test .` runs 21 tests:
 
 - **Round trips** of nine inputs (empty, one byte, two bytes, a run of one byte, text, noise, a pattern
   longer than the window, noise with repeats near and far, every byte value), through the one-shot
@@ -112,6 +110,7 @@ A target with a C library (the Pico SDK's newlib, Zephyr, FreeRTOS) has the head
   checks `sizeof` of both state structs and the window, lookahead and input-buffer parameters against the
   driver's.
 - **A golden vector**: a known text compresses to the 17 bytes the C library gives.
+- **Bare metal**: `build-c` for three board targets, checked with `nm` (see Bare metal above).
 
 Mutations, each run and each red: the encoder's `sink` count off by one; the decoder's likewise; the
 encoder's `more` mapped to `EMPTY`; the encoder `finish` not called in `compress`; the decoder's `finish`

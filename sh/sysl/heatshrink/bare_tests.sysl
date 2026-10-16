@@ -1,0 +1,56 @@
+module sh.sysl.heatshrink
+@tests
+@requires(heap, os)
+
+// The package on a board. The vendored C includes `<stdlib.h>` and `<string.h>`; on a bare-metal target
+// `package.hocon`'s `cstd` dependency (`if = "!libc"`) supplies those headers and the definitions of what
+// the C calls. `build-c` of the package for each target must succeed, and the archive must define the
+// encoder and decoder entry points and cstd's `memcpy`, `memmove` and `memset`.
+
+import sysl.buf.{Buf, buf}
+import sysl.fs.make_dir_all
+import sysl.process.capture
+import sysl.testing.compiler
+import sysl.text.split
+
+// What the vendored C calls out of libc.
+private val called: []string = ["memcpy", "memmove", "memset"]
+
+// The package's own C entry points.
+private val entry_points: []string = [
+    "heatshrink_encoder_sink", "heatshrink_encoder_poll", "heatshrink_encoder_finish", "heatshrink_encoder_reset",
+    "heatshrink_decoder_sink", "heatshrink_decoder_poll", "heatshrink_decoder_finish", "heatshrink_decoder_reset",
+]
+
+// The global symbols `build-c .` writes into the archive for `target`, one name per line.
+private defines(target: string) -> string
+    val dir = f".sysl/bare-tests/$target"
+    make_dir_all(dir).unwrap()
+    val lib = f"$dir/libheatshrink.a"
+    var args: Buf[string] = buf()
+    for a in ["build-c", ".", "-o", lib, "--target", target] do args.push(a)
+    val built = capture(compiler(), args.view(), stderr = true).unwrap()
+    if !built.status.ok() then panic(f"build-c for $target failed:\n${built.err.unwrap_or("")}")
+    val listed = capture("nm", ["-g", lib]).unwrap()
+    assert(listed.status.ok())
+    var defined = "\n"
+    for line in split(listed.text, "\n")
+        val t = line.index_of(" T ")
+        if t.is_some() then defined += f"${line[t.unwrap() + 3..<line.len]}\n"
+    defined
+
+private bare_case(target: string)
+    val defined = defines(target)
+    for n in entry_points
+        if !defined.contains(f"\n$n\n") then panic(f"$target: the archive does not define $n")
+    for n in called
+        if !defined.contains(f"\n$n\n") then panic(f"$target: the archive does not define $n, so cstd was not its libc")
+
+@test("on thumbv7em the package builds with cstd as its libc")
+bare_thumbv7em() = bare_case("thumbv7em-freestanding")
+
+@test("on thumbv6m the package builds with cstd as its libc")
+bare_thumbv6m() = bare_case("thumbv6m-freestanding")
+
+@test("on riscv32 the package builds with cstd as its libc")
+bare_riscv32() = bare_case("riscv32-freestanding")
