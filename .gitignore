@@ -1,2 +1,4 @@
 target/
 *.syslib
+.sysl/
+cstd.a.h
