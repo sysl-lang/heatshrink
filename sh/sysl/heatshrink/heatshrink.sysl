@@ -1,6 +1,7 @@
 module sh.sysl.heatshrink
 
 import sh.sysl.heatshrink.c
+import sysl.raw.ptr_cast
 import sysl.slices.{as_mut_ptr, as_ptr}
 
 // LZSS compression for small machines, bound to heatshrink: an encoder that needs about 1.6 KiB and a
