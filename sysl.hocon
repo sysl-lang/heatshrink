@@ -4,14 +4,14 @@
 // This is the block a consumer writes to reach it:
 //
 //     dependencies {
-//       heatshrink { git = "github.com/sysl-lang/heatshrink", version = "0.1.2" }
+//       heatshrink { git = "github.com/sysl-lang/heatshrink", version = "0.1.3" }
 //     }
 //
 // The module is `sh.sysl.heatshrink`.
 
 package {
   name    = "heatshrink"
-  version = "0.1.2"
+  version = "0.1.3"
 
   sysl = "0.6.0"
 }
@@ -19,7 +19,7 @@ package {
 // On a bare-metal target there is no libc, so cstd supplies the few functions the vendored C calls.
 // On a hosted target the dependency is dropped and the system libc answers.
 dependencies {
-  cstd { git = "github.com/sysl-lang/cstd", version = "0.1.7", if = "!libc" }
+  cstd { git = "github.com/sysl-lang/cstd", version = "0.1.8", if = "!libc" }
 }
 
 // **What heatshrink is compiled with is this package's decision, not a consumer's.**
