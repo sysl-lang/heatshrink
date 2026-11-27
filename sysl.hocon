@@ -19,7 +19,7 @@ package {
 // On a bare-metal target there is no libc, so cstd supplies the few functions the vendored C calls.
 // On a hosted target the dependency is dropped and the system libc answers.
 dependencies {
-  cstd { git = "github.com/sysl-lang/cstd", version = "0.1.8", if = "!libc" }
+  cstd { git = "github.com/sysl-lang/cstd", version = "0.1.10", if = "!libc" }
 }
 
 // **What heatshrink is compiled with is this package's decision, not a consumer's.**
